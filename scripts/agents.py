@@ -32,6 +32,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # リトライ設定
 MAX_RETRIES = 3
+MAX_RATE_LIMIT_RETRIES = 6  # 429 レート制限時は最大6回リトライ
 RETRY_BASE_DELAY = 2  # 秒（指数バックオフ: 2s, 4s, 8s）
 
 # ペルソナ定義（全エージェント共通）
@@ -103,16 +104,28 @@ def _get_client() -> genai.Client:
     return _gemini_client
 
 
+def _parse_retry_delay(error_msg: str) -> int | None:
+    """Google API エラーからリトライ推奨秒数を抽出する。"""
+    match = re.search(r'[Rr]etry(?:Delay|Info|[\s]*in)\D*(\d+)', error_msg)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def _call_gemini(prompt: str, temperature: float = 0.8, agent_name: str = "Agent") -> str:
     """
     Gemini API を呼び出す（自動リトライ + 指数バックオフ付き）。
     無料枠: 15 RPM / 1,500 RPD なので余裕があるが、一時的エラーに対応。
+    429 レート制限時は Google 推奨の待ち時間を尊重し、最大6回リトライする。
     """
     client = _get_client()
+    attempt = 0
+    rate_limit_retries = 0
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    while attempt < MAX_RETRIES:
+        attempt += 1
         try:
-            print(f"[{agent_name}] Gemini API call (attempt {attempt}/{MAX_RETRIES})...")
+            print(f"[{agent_name}] Gemini API call (attempt {attempt + rate_limit_retries})...")
             response = client.models.generate_content(
                 model="gemini-2.0-flash",
                 contents=prompt,
@@ -129,13 +142,23 @@ def _call_gemini(prompt: str, temperature: float = 0.8, agent_name: str = "Agent
 
         except Exception as e:
             error_msg = str(e)
-            print(f"[{agent_name}] API error (attempt {attempt}): {error_msg}")
+            print(f"[{agent_name}] API error (attempt {attempt + rate_limit_retries}): {error_msg}")
 
-            # 429 Rate Limit → 長めに待つ
+            # 429 Rate Limit → Google 推奨の待ち時間を使って長めにリトライ
             if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                wait = RETRY_BASE_DELAY * (2 ** attempt) * 2
-                print(f"[{agent_name}] Rate limited. Waiting {wait}s...")
+                rate_limit_retries += 1
+                if rate_limit_retries > MAX_RATE_LIMIT_RETRIES:
+                    raise RuntimeError(
+                        f"[{agent_name}] Rate limit exceeded after {rate_limit_retries} retries. "
+                        f"無料枠の日次制限に達した可能性があります。"
+                    ) from e
+                # Google 推奨の retryDelay を解析、なければ指数バックオフ
+                google_delay = _parse_retry_delay(error_msg)
+                fallback = RETRY_BASE_DELAY * (2 ** rate_limit_retries) * 2
+                wait = max(google_delay or 0, fallback, 30)  # 最低30秒
+                print(f"[{agent_name}] Rate limited. Waiting {wait}s ({rate_limit_retries}/{MAX_RATE_LIMIT_RETRIES})...")
                 time.sleep(wait)
+                attempt -= 1  # 429 は通常リトライ回数を消費しない
                 continue
 
             # リトライ不可能なエラー（認証エラーなど）
@@ -152,7 +175,7 @@ def _call_gemini(prompt: str, temperature: float = 0.8, agent_name: str = "Agent
             else:
                 raise
 
-    raise RuntimeError(f"[{agent_name}] Gemini API call failed after {MAX_RETRIES} attempts")
+    raise RuntimeError(f"[{agent_name}] Gemini API call failed after {MAX_RETRIES + rate_limit_retries} attempts")
 
 
 # =============================================================================
