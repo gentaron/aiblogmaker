@@ -1,0 +1,30 @@
+title: "ミナ・エウレカの思考日記"
+description: "ひらめきを真剣に生きる——AIが紡ぐミナ・エウレカの日常と思索の記録"
+baseurl: ""
+url: ""
+timezone: Asia/Tokyo
+permalink: /:year/:month/:day/:title/
+
+markdown: kramdown
+kramdown:
+  input: GFM
+
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+defaults:
+  - scope:
+      path: ""
+      type: "posts"
+    values:
+      layout: "post"
+      author: "ミナ・エウレカ"
+
+exclude:
+  - scripts/
+  - data/
+  - requirements.txt
+  - README.md
+  - Gemfile.lock

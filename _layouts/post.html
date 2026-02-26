@@ -1,0 +1,47 @@
+---
+layout: default
+---
+<article class="post">
+  <header class="post-header">
+    <div class="post-meta">
+      <time datetime="{{ page.date | date_to_xmlschema }}">{{ page.date | date: "%Y年%m月%d日" }}</time>
+      {% if page.category %}
+      <span class="post-category">{{ page.category }}</span>
+      {% endif %}
+    </div>
+    <h1 class="post-title">{{ page.title }}</h1>
+    {% if page.meta_description %}
+    <p class="post-excerpt">{{ page.meta_description }}</p>
+    {% endif %}
+  </header>
+
+  <div class="post-content">
+    {{ content }}
+  </div>
+
+  {% if page.tags.size > 0 %}
+  <footer class="post-footer">
+    <div class="post-tags">
+      {% for tag in page.tags %}
+      <span class="tag">#{{ tag }}</span>
+      {% endfor %}
+    </div>
+  </footer>
+  {% endif %}
+
+  {% if page.reference_title %}
+  <div class="post-reference">
+    <h3>今日のインスピレーション元</h3>
+    <p>{{ page.reference_title }}</p>
+  </div>
+  {% endif %}
+</article>
+
+<nav class="post-navigation">
+  {% if page.previous.url %}
+  <a href="{{ page.previous.url | relative_url }}" class="nav-prev">&larr; {{ page.previous.title }}</a>
+  {% endif %}
+  {% if page.next.url %}
+  <a href="{{ page.next.url | relative_url }}" class="nav-next">{{ page.next.title }} &rarr;</a>
+  {% endif %}
+</nav>
