@@ -15,7 +15,18 @@ import json
 import os
 import re
 import time
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
+
+# .env ファイルがあれば自動読み込み
+_env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+if os.path.exists(_env_path):
+    with open(_env_path) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
@@ -72,14 +83,14 @@ CATEGORIES = [
 ]
 
 
-_gemini_configured = False
+_gemini_client = None
 
 
-def _configure_gemini():
-    """Gemini API を設定する（一度だけ実行）。"""
-    global _gemini_configured
-    if _gemini_configured:
-        return
+def _get_client() -> genai.Client:
+    """Gemini クライアントを取得する（一度だけ初期化）。"""
+    global _gemini_client
+    if _gemini_client is not None:
+        return _gemini_client
     if not GEMINI_API_KEY:
         raise ValueError(
             "GEMINI_API_KEY が設定されていません。\n"
@@ -87,9 +98,9 @@ def _configure_gemini():
             "ローカル: export GEMINI_API_KEY='your-key' を実行してください。\n"
             "無料キー取得: https://aistudio.google.com/apikey"
         )
-    genai.configure(api_key=GEMINI_API_KEY)
-    _gemini_configured = True
-    print("[Gemini] API configured successfully")
+    _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    print("[Gemini] Client initialized (google-genai SDK)")
+    return _gemini_client
 
 
 def _call_gemini(prompt: str, temperature: float = 0.8, agent_name: str = "Agent") -> str:
@@ -97,15 +108,15 @@ def _call_gemini(prompt: str, temperature: float = 0.8, agent_name: str = "Agent
     Gemini API を呼び出す（自動リトライ + 指数バックオフ付き）。
     無料枠: 15 RPM / 1,500 RPD なので余裕があるが、一時的エラーに対応。
     """
-    _configure_gemini()
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    client = _get_client()
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             print(f"[{agent_name}] Gemini API call (attempt {attempt}/{MAX_RETRIES})...")
-            response = model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
                     temperature=temperature,
                     max_output_tokens=4096,
                 ),

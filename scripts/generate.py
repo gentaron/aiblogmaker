@@ -11,6 +11,7 @@ import os
 import random
 import re
 import sys
+import argparse
 from datetime import datetime, timezone, timedelta
 
 # プロジェクトルートをパスに追加
@@ -84,23 +85,26 @@ def generate_front_matter(seo_data: dict, topic_plan: dict, reference: dict, dat
     meta_desc = seo_data.get("meta_description", "")
     category = topic_plan.get("category", "日常のひらめき")
 
-    # YAML用にエスケープ
+    # YAML用にエスケープ（Python 3.11対応: f-string内でバックスラッシュ不可）
     title_escaped = title.replace('"', '\\"')
     meta_escaped = meta_desc.replace('"', '\\"')
+    ref_title_escaped = reference.get("title", "").replace('"', '\\"')
+    ref_url = reference.get("url", "")
+    date_str = date.strftime("%Y-%m-%d %H:%M:%S +0900")
 
     tags_yaml = "\n".join(f'  - "{tag}"' for tag in tags)
 
     front_matter = f"""---
 layout: post
 title: "{title_escaped}"
-date: {date.strftime('%Y-%m-%d %H:%M:%S +0900')}
+date: {date_str}
 category: "{category}"
 tags:
 {tags_yaml}
 keywords: "{keywords}"
 meta_description: "{meta_escaped}"
-reference_title: "{reference.get('title', '').replace('"', '\\"')}"
-reference_url: "{reference.get('url', '')}"
+reference_title: "{ref_title_escaped}"
+reference_url: "{ref_url}"
 author: "ミナ・エウレカ"
 ---
 """
@@ -250,6 +254,57 @@ def run_pipeline():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="ミナ・エウレカ 日記生成パイプライン")
+    parser.add_argument("--dry-run", action="store_true", help="APIを呼ばずにパイプライン構造をテスト")
+    args = parser.parse_args()
+
+    if args.dry_run:
+        # ドライラン: APIキー不要でパイプライン構造と依存関係を検証
+        print("=" * 60)
+        print("[Dry Run] パイプライン構造テスト")
+        print("=" * 60)
+        import importlib
+        errors = []
+        for module in ["crawler", "database", "agents"]:
+            try:
+                importlib.import_module(module)
+                print(f"  ✓ {module} — import OK")
+            except ImportError as e:
+                print(f"  ✗ {module} — {e}")
+                errors.append(module)
+        print("")
+        print("[Dry Run] データベース確認...")
+        try:
+            from database import get_stats
+            stats = get_stats()
+            print(f"  ✓ database — stats: {json.dumps(stats, ensure_ascii=False)}")
+        except Exception as e:
+            print(f"  ✗ database — {e}")
+            errors.append("database")
+        print("")
+        print("[Dry Run] クロール確認（キャッシュ使用）...")
+        try:
+            from crawler import get_articles
+            articles = get_articles(force_refresh=False)
+            print(f"  ✓ crawler — {len(articles)} articles in cache")
+            if articles:
+                print(f"  ✓ sample: {articles[0].get('title', '?')[:50]}")
+        except Exception as e:
+            print(f"  ✗ crawler — {e}")
+            errors.append("crawler")
+        print("")
+        if errors:
+            print(f"[Dry Run] ✗ エラー: {errors}")
+            sys.exit(1)
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+        if api_key:
+            print(f"[Dry Run] ✓ GEMINI_API_KEY — 設定済み ({api_key[:8]}...)")
+        else:
+            print("[Dry Run] ⚠ GEMINI_API_KEY — 未設定（本番実行時に必要）")
+        print("")
+        print("[Dry Run] ✓ 全コンポーネント正常。本番実行: python scripts/generate.py")
+        sys.exit(0)
+
     try:
         filename = run_pipeline()
         print(f"\nOutput: {filename}")
