@@ -250,5 +250,17 @@ def run_pipeline():
 
 
 if __name__ == "__main__":
-    filename = run_pipeline()
-    print(f"\nOutput: {filename}")
+    try:
+        filename = run_pipeline()
+        print(f"\nOutput: {filename}")
+    except ValueError as e:
+        # API キー未設定などの設定エラー
+        print(f"\n[ERROR] 設定エラー: {e}", file=sys.stderr)
+        print("\n[HELP] セットアップ方法:")
+        print("  1. https://aistudio.google.com/apikey で無料キーを取得")
+        print("  2. GitHub: Settings → Secrets → GEMINI_API_KEY を追加")
+        print("  3. ローカル: export GEMINI_API_KEY='your-key'")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n[ERROR] 予期しないエラー: {e}", file=sys.stderr)
+        sys.exit(1)

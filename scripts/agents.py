@@ -14,9 +14,14 @@ Gemini API を使用してAI日記ブログの記事を自動生成する。
 import json
 import os
 import re
+import time
 import google.generativeai as genai
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+# リトライ設定
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2  # 秒（指数バックオフ: 2s, 4s, 8s）
 
 # ペルソナ定義（全エージェント共通）
 MINA_PERSONA = """
@@ -67,25 +72,76 @@ CATEGORIES = [
 ]
 
 
+_gemini_configured = False
+
+
 def _configure_gemini():
-    """Gemini API を設定する。"""
+    """Gemini API を設定する（一度だけ実行）。"""
+    global _gemini_configured
+    if _gemini_configured:
+        return
     if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY environment variable is not set")
+        raise ValueError(
+            "GEMINI_API_KEY が設定されていません。\n"
+            "GitHub Actions: Settings → Secrets → GEMINI_API_KEY を追加してください。\n"
+            "ローカル: export GEMINI_API_KEY='your-key' を実行してください。\n"
+            "無料キー取得: https://aistudio.google.com/apikey"
+        )
     genai.configure(api_key=GEMINI_API_KEY)
+    _gemini_configured = True
+    print("[Gemini] API configured successfully")
 
 
-def _call_gemini(prompt: str, temperature: float = 0.8) -> str:
-    """Gemini API を呼び出す。"""
+def _call_gemini(prompt: str, temperature: float = 0.8, agent_name: str = "Agent") -> str:
+    """
+    Gemini API を呼び出す（自動リトライ + 指数バックオフ付き）。
+    無料枠: 15 RPM / 1,500 RPD なので余裕があるが、一時的エラーに対応。
+    """
     _configure_gemini()
     model = genai.GenerativeModel("gemini-2.0-flash")
-    response = model.generate_content(
-        prompt,
-        generation_config=genai.types.GenerationConfig(
-            temperature=temperature,
-            max_output_tokens=4096,
-        ),
-    )
-    return response.text
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"[{agent_name}] Gemini API call (attempt {attempt}/{MAX_RETRIES})...")
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=temperature,
+                    max_output_tokens=4096,
+                ),
+            )
+            text = response.text
+            if text:
+                print(f"[{agent_name}] API response received ({len(text)} chars)")
+                return text
+            print(f"[{agent_name}] Empty response, retrying...")
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[{agent_name}] API error (attempt {attempt}): {error_msg}")
+
+            # 429 Rate Limit → 長めに待つ
+            if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                wait = RETRY_BASE_DELAY * (2 ** attempt) * 2
+                print(f"[{agent_name}] Rate limited. Waiting {wait}s...")
+                time.sleep(wait)
+                continue
+
+            # リトライ不可能なエラー（認証エラーなど）
+            if "403" in error_msg or "PERMISSION_DENIED" in error_msg:
+                raise ValueError(
+                    f"Gemini API 認証エラー: APIキーが無効か、権限がありません。\n"
+                    f"https://aistudio.google.com/apikey で確認してください。"
+                ) from e
+
+            if attempt < MAX_RETRIES:
+                wait = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                print(f"[{agent_name}] Retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+
+    raise RuntimeError(f"[{agent_name}] Gemini API call failed after {MAX_RETRIES} attempts")
 
 
 # =============================================================================
@@ -138,7 +194,7 @@ def ceo_agent(
   "key_question": "記事の核となる問い（例: AIは本当に創造性を持てるのか？）"
 }}
 """
-    response = _call_gemini(prompt, temperature=0.9)
+    response = _call_gemini(prompt, temperature=0.9, agent_name="CEO Agent")
     return _parse_json_response(response)
 
 
@@ -180,7 +236,7 @@ def seo_agent(topic_plan: dict) -> dict:
   "slug": "url-friendly-slug"
 }}
 """
-    response = _call_gemini(prompt, temperature=0.7)
+    response = _call_gemini(prompt, temperature=0.7, agent_name="SEO Agent")
     return _parse_json_response(response)
 
 
@@ -224,7 +280,7 @@ def writer_agent(topic_plan: dict, seo_data: dict) -> str:
 
 本文を出力してください:
 """
-    return _call_gemini(prompt, temperature=0.85)
+    return _call_gemini(prompt, temperature=0.85, agent_name="Writer Agent")
 
 
 # =============================================================================
@@ -273,7 +329,7 @@ def editor_agent(draft: str, topic_plan: dict, seo_data: dict) -> dict:
 重要: edited_body には校正後の完全な本文をMarkdown形式で含めてください。
 修正が不要な場合は原稿をそのまま返してください。
 """
-    response = _call_gemini(prompt, temperature=0.3)
+    response = _call_gemini(prompt, temperature=0.3, agent_name="Editor Agent")
     return _parse_json_response(response)
 
 
